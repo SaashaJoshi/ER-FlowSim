@@ -36,10 +36,3 @@ class Patient:
             yield simpy.Timeout(self.env, 15)
         elif test == 'CT':
             yield simpy.Timeout(self.env, 30)
-
-# # Run the simulation with 3 doctors, 6 nurses, and 20 beds for 24 hours
-# sim = Patient(3, 6, 20, 24*60)
-# sim.run_simulation()
-#
-# # Print the results
-# print(f"Patients processed: {sim.patients_processed}")
