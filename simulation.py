@@ -22,12 +22,13 @@ class ERSim:
         self.doctor = simpy.Resource(self.env, capacity=num_doctors)
         self.nurse = simpy.Resource(self.env, capacity=num_nurses)
         self.bed = simpy.Resource(self.env, capacity=num_beds)
+        self.admin_staff = simpy.Resource(self.env, capacity=num_admin_staff)
+
         self.triage_waiting_room = []
         self.ed_waiting_room = []
         self.medication_waiting_room = []
 
-        self.admin_staff = simpy.Resource(self.env, capacity=num_admin_staff)
-
+        self.medication = simpy.Container(self.env, init=0)
         self.patients_processed = 0
 
     def run_simulation(self):
@@ -37,8 +38,8 @@ class ERSim:
     def generate_patients(self):
         while True:
             print(f"Patient produced")
-            inter_arrival_time = random.expovariate(1 / 10)
-            service_time = random.expovariate(1 / 20)
+            inter_arrival_time = random.expovariate(1 / 100)
+            service_time = random.expovariate(1 / 100)
             self.env.process(self.patient_flow(Patient(id, self.env.now, service_time)))
             yield self.env.timeout(inter_arrival_time)
 
@@ -49,7 +50,7 @@ class ERSim:
         with self.admin_staff.request() as admin_staff_request:
             yield admin_staff_request
 
-            registration_time = random.randint(3, 6)
+            registration_time = random.randint(0, 1)
             yield self.env.timeout(registration_time)
 
             self.admin_staff.release(admin_staff_request)
@@ -59,7 +60,7 @@ class ERSim:
         self.triage_waiting_room.append(patient.id)
         print(f"Triage waiting room: {self.triage_waiting_room}")
 
-        triage_waiting_time = np.random.exponential(5)
+        triage_waiting_time = np.random.exponential(1)
 
         patient.waiting_time += triage_waiting_time
 
@@ -133,9 +134,9 @@ class ERSim:
         with self.doctor.request() as doctor_request:
             yield doctor_request
 
-            print(f"Doctor assigned to Patient{patient.id} in triage treament")
+            print(f"Doctor assigned to Patient{patient.id} in triage treatment")
 
-            assessment_time = np.random.exponential(30)
+            assessment_time = np.random.exponential(1)
             yield self.env.timeout(assessment_time)
 
             # Not implementing the review stage for now.
@@ -149,71 +150,99 @@ class ERSim:
             self.doctor.release(doctor_request)
             self.patients_processed += 1
 
+    def enter_medication_waiting_room(self, patient):
+        print(f"Patient{patient.id} enters medication waiting room")
+        self.medication_waiting_room.append(patient.id)
+        print(f"Medication waiting room: {self.medication_waiting_room}")
+
+        medication_waiting_time = 3
+        patient.waiting_time += medication_waiting_time
+
+        return medication_waiting_time
+
+    def give_medication(self, patient):
+        print("Looking for medication")
+        if self.medication.level < 1:
+            print(f"Medication not available")
+            medication_waiting_time = self.enter_medication_waiting_room(patient)
+            yield self.env.timeout(medication_waiting_time)
+
+            print(f"Medication now available")
+            self.medication.put(1)
+
+            # Pop patient from ED waiting room list
+            self.medication_waiting_room.remove(patient.id)
+            print(f"Medication waiting room: {self.medication_waiting_room}")
+
+            yield self.medication.get(1)
+        else:
+            print(f"Medication available")
+            yield self.medication.get(1)
+
+        medication_time = 3
+        yield self.env.timeout(medication_time)
+
     def enter_ed_waiting_room(self, patient):
         print(f"Patient{patient.id} enters ED waiting room")
         self.ed_waiting_room.append(patient.id)
         print(f"ED waiting room: {self.ed_waiting_room}")
 
         ed_waiting_time = np.random.exponential(5)
+        # ed_waiting_time = 0.1
 
         patient.waiting_time += ed_waiting_time
 
         # Yield triage waiting time.
         yield self.env.timeout(ed_waiting_time)
 
-    def enter_medication_waiting_room(self, patient):
-        print(f"Patient{patient.id} enters medication waiting room")
-        self.medication_waiting_room.append(patient.id)
-        print(f"Medication waiting room: {self.medication_waiting_room}")
+    def ed_process(self, patient):
+        print(f"Patient{patient.id} arrives in ED")
+        self.env.process(self.enter_ed_waiting_room(patient))
 
-        medication_waiting_time = np.random.exponential(1)
-
-        patient.waiting_time += medication_waiting_time
-
-        # Yield triage waiting time.
-        yield self.env.timeout(medication_waiting_time)
-
-    def give_medication(self, patient):
-        # Check if medication available
-        medication_availability = np.random.randint(0, 1)
-
-        if medication_availability == 0:
-            # send to waiting room
-            self.env.process(self.enter_medication_waiting_room(patient))
-
-        # Else no waiting needed; administer medication
-        yield self.env.timeout(np.random.uniform(2, 2))
-
-
-    def ed_treatment(self, patient):
         with self.doctor.request() as doctor_request:
             yield doctor_request
 
-            print(f"Doctor assigned to Patient{patient.id} in ED treament")
+            # Pop patient from ED waiting room list
+            self.ed_waiting_room.remove(patient.id)
+            print(f"ED waiting room: {self.ed_waiting_room}")
 
-            assessment_time = np.random.exponential(30)
+            print(f"Doctor assigned to Patient{patient.id} in ED treament")
+            print(f"Performing assessment on patient{patient.id} in ED")
+            assessment_time = np.random.exponential(1)
             yield self.env.timeout(assessment_time)
 
             # Check diagnostics required (At this time subprocess not created)
             # if diagnostic_required == "Yes":
             #     pass
 
-            # else perform procedure on patient and check if medication needed
-            if self.nurse.count == self.nurse.capacity:
-                # doctor gives the medication
-                self.env.process(self.give_medication(patient))
+            # else perform procedure on patient and give medication
+            procedure_time = np.random.exponential(1)
+            yield self.env.timeout(procedure_time)
+
+            # give medication
+            if self.nurse.count == 0:
+                print(f"Nurse count = {self.nurse.count}")
+                print(f"No nurse available to give medication")
+
+                # Doctor gives the medication
+                print("Doctor gives medication")
+                yield self.env.process(self.give_medication(patient))
+
             else:
-                # yield nurse to give medication. but the doc is not released.
+                print("Calling available nurse")
+                # Call nurse to give medication
                 with self.nurse.request() as nurse_request:
                     yield nurse_request
 
-                    self.env.process(self.give_medication(patient))
+                    yield self.env.process(self.give_medication(patient))
                     self.nurse.release(nurse_request)
 
             # Refer patient to ED
             refer_immediately = np.random.randint(0, 1)
 
             if refer_immediately:
+                print(f"Patient{patient.id} referred to inpatient treatment"
+                      f"immediately.")
                 self.doctor.release(doctor_request)
 
                 # Start inpatient process/treatment
@@ -222,12 +251,8 @@ class ERSim:
                 # Wait for diagnostic results/investigation
                 # IDK but the diagnosis wasn't required in earlier steps.
                 # maybe re-request diagnostics here.
-                pass
-
-    def ed_process(self, patient):
-        print(f"Patient{patient.id} arrives in ED")
-        self.env.process(self.enter_ed_waiting_room(patient))
-        self.env.process(self.ed_treatment(patient))
+                print("Wait for results")
+                exit()
 
     def enter_inpatient_waiting_room(self, patient):
         print(f"Patient{patient.id} enters inpatient waiting room")
@@ -241,9 +266,13 @@ class ERSim:
         # Yield triage waiting time.
         yield self.env.timeout(inpatient_waiting_time)
 
-    def inpatient_treatment(self, patient):
+    def inpatient_process(self, patient):
+        self.env.process(self.enter_inpatient_waiting_room(patient))
+
         with self.doctor.request() as doctor_request:
             yield doctor_request
+
+            self.inpatient_waiting_room.remove(patient.id)
 
             # Check patient and decide to admit
             admit = np.random.randint(0, 1)
@@ -259,20 +288,17 @@ class ERSim:
                 # Release doctor and after waiting call senior doctor
                 # check how to manage doctor skill level
                 self.env.process(self.enter_ed_waiting_room())
+                self.ed_waiting_room.remove(patient.id)
 
                 with self.doctor.request() as doctor_request:
                     yield doctor_request
 
-                review_time = np.random.exponential(7)
+                review_time = np.random.exponential(1)
                 self.env.timeout(review_time)
 
                 # Treatment complete; release doctor
                 self.doctor.release(doctor_request)
                 self.patients_processed += 1
-
-    def inpatient_process(self, patient):
-        self.env.process(self.enter_inpatient_waiting_room(patient))
-        self.env.process(self.inpatient_treatment(patient))
 
     def transfer_to_ward(self, patient):
         # Initiates transfer process
@@ -304,7 +330,7 @@ class ERSim:
                     self.env.process(self.release_beds(patient))
 
     def release_beds(self, patient):
-        yield self.env.timeout(np.random.exponential(24))
+        yield self.env.timeout(np.random.exponential(1))
 
     def patient_flow(self, patient):
         print(f"Patient{patient.id} enters the hospital")
@@ -328,33 +354,13 @@ class ERSim:
                     print("Entering triage process")
                     yield self.env.process(self.triage_process(patient))
 
-            # with self.doctor.request() as doctor_request:
-            #     yield doctor_request
-            #
-            # with self.bed.request() as bed_request:
-            #     yield bed_request
-            #
-            #     # Assign bed to patient
-            #     patient.bed_assigned = bed_request
-            #
-            #     # Perform diagnostic tests
-            #     for test in patient.tests:
-            #         yield self.env.process(get_test_result(test))
-
-            # # Wait for service time
-            # yield self.env.timeout(patient.service_time)
-            #
-            # # Release bed and resources
-            # self.bed.release(patient.bed_assigned)
-            # self.nurse.release(nurse_request)
-            # self.doctor.release(doctor_request)
-
-            # self.patients_processed += 1
-
 
 if __name__ == "__main__":
-    sim = ERSim(3, 3, 3, 3, 40)
+    sim = ERSim(10, 10, 10, 10, 999)
     sim.run_simulation()
 
     # Print the results
     print(f"Patients processed: {sim.patients_processed}")
+    print(sim.patients_processed)
+    if sim.patients_processed != None:
+        print(f"No info about num patients processed received")
