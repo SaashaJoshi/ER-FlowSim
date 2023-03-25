@@ -10,4 +10,3 @@ class Nurse:
         self.env = simpy.Environment()
         self.schedule_time = schedule_time
         self.skill_level = skill_level
-

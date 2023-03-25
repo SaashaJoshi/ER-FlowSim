@@ -3,6 +3,7 @@ import numpy as np
 import simpy
 from patients import Patient
 
+
 class ERSim:
     '''
     ERSim: Emergency Room Simulation class creates objects to simulate
@@ -10,6 +11,7 @@ class ERSim:
     '''
 
     patient_count = 0
+
     def __init__(self, num_doctors, num_nurses, num_beds, num_admin_staff, sim_time):
         self.env = simpy.Environment()
         self.num_doctors = num_doctors
@@ -20,14 +22,20 @@ class ERSim:
         self.patients = []
         self.doctor = simpy.Resource(self.env, capacity=num_doctors)
         self.nurse = simpy.Resource(self.env, capacity=num_nurses)
-        self.bed = simpy.Resource(self.env, capacity=num_beds)
         self.admin_staff = simpy.Resource(self.env, capacity=num_admin_staff)
+
+        self.bed = simpy.Resource(self.env, capacity=num_beds)
+        self.ecg_machine = simpy.Resource(self.env, capacity=2)
+        self.ct_machine = simpy.Resource(self.env, capacity=2)
+        self.x_ray_machine = simpy.Resource(self.env, capacity=4)
 
         self.triage_waiting_room = []
         self.ed_waiting_room = []
         self.medication_waiting_room = []
 
         self.medication = simpy.Container(self.env, init=0)
+        self.blood_tubes = simpy.Container(self.env, capacity=30)
+        self.stationary = simpy.Container(self.env, capacity=30)
         self.patients_processed = 0
 
     def run_simulation(self):
@@ -37,7 +45,7 @@ class ERSim:
     def generate_patients(self):
         while True:
             print(f"Patient produced")
-            inter_arrival_time = random.expovariate(1/6)
+            inter_arrival_time = random.expovariate(1 / 6)
             service_time = random.expovariate(1)
             ERSim.patient_count += 1
             patient = Patient(self.env.now, service_time)
@@ -103,7 +111,6 @@ class ERSim:
                 self.doctor.release(doctor_request)
                 self.admin_staff.release(admin_staff_request)
 
-
         # with self.nurse.request() as nurse_request:
         #     yield nurse_request
         #
@@ -111,7 +118,7 @@ class ERSim:
         #     self.nurse.release(nurse_request)
 
     def get_diagnostic_tests(self, patient):
-        diag_tests = np.random.randint(0,7)
+        diag_tests = np.random.randint(0, 7)
         diag_tests = f"{diag_tests:2b}"
         print(diag_tests)
         for index, val in enumerate(diag_tests):
@@ -126,6 +133,10 @@ class ERSim:
                 # elif index == 2:
                 #     print(f"Send patient{patient.id} for XRay test")
                 #     yield self.env.process(self.get_x_ray(patient))
+
+    def get_arrival_ctas(self, patient):
+        patient.ctas_level = random.choices([1, 2, 3, 4, 5], weights=[1, 1, 2, 3, 3])
+        yield self.env.timeout(3)
 
     def triage_process(self, patient):
         print(f"Patient{patient.id} sent to triage waiting room")
@@ -144,6 +155,8 @@ class ERSim:
 
             # Requirement to be in ED or not
             ed_requirement = self.get_screening_results()
+
+            self.nurse.release(nurse_request)
 
             if ed_requirement:
                 print(f"Patient{patient.id} sent to registration counter")
@@ -191,7 +204,6 @@ class ERSim:
                 # Send patient to local health center
                 print("Send patient to local health center")
                 patient.ctas_level = 6
-                self.nurse.release(nurse_request)
 
                 patient.leave_time = self.env.now
                 self.patients_processed += 1
@@ -413,12 +425,41 @@ class ERSim:
             with self.nurse.request() as nurse_request:
                 yield nurse_request
 
-                # Yield nurse for triage determination
-                if patient.get_ctas_level() == 1:
+                # Yield nurse for first (arrival) triage determination
+                yield self.env.process(self.get_arrival_ctas())
+
+                if patient.ctas_level == 1 or patient.ctas_level == 2:
                     # CTAS 1 - Send patient the other way
-                    patient.ctas_level = 1
                     print(f"Patient{patient.id} CTAS I")
-                    pass
+
+                    if patient.ctas_level == 1:
+                        # Send to resuscitation room
+                        pass
+
+                    # Attend tot he patient
+                    yield self.env.timeout(3)
+
+                    # Send for diagnostic tests
+                    yield self.env.process(self.get_diagnostic_tests(patient))
+
+                    # Review diagnostic results
+                    yield self.env.timeout(6)
+
+                    further_tests = np.random.randint(0, 1)
+
+                    if further_tests == 1:
+                        yield self.env.process(self.get_diagnostic_tests(patient))
+
+                    # If external consultation needed
+                    # Do not include for now
+                    # Else send to inpatient process
+
+                    # release docs and nurses and send for
+                    self.nurse.release(nurse_request)
+                    self.doctor.release(doctor_request)
+
+                    self.env.process(self.inpatient_process(patient))
+
                 else:
                     # Release nurse, doctor and start triage process
                     self.nurse.release(nurse_request)
@@ -427,6 +468,7 @@ class ERSim:
                     print(f"Patient{patient.id} not in CTAS I")
                     print("Entering triage process")
                     yield self.env.process(self.triage_process(patient))
+
 
 def file_output(patient):
     f = open("simulation_results.csv", "a")
