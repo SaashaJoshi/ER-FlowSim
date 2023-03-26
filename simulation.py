@@ -23,6 +23,7 @@ class ERSim:
         self.doctor = simpy.Resource(self.env, capacity=num_doctors)
         self.nurse = simpy.Resource(self.env, capacity=num_nurses)
         self.admin_staff = simpy.Resource(self.env, capacity=num_admin_staff)
+        self.consultant = simpy.Resource(self.env, capacity=3)
 
         self.bed = simpy.Resource(self.env, capacity=num_beds)
         self.ecg_machine = simpy.Resource(self.env, capacity=2)
@@ -83,6 +84,32 @@ class ERSim:
         elif scale == "Diagnostic":
             yield self.env.timeout(random.randint(5, 10))
 
+    def get_x_ray(self, patient):
+        with self.doctor.request() as doctor_request:
+            yield doctor_request
+
+            # Doctor approves need for an X-ray
+            yield self.env.timeout(3)
+
+            # Should I call a nurse here or admin staff?
+            with self.nurse.request() as nurse_request:
+                yield nurse_request
+
+                with self.x_ray_machine.request() as x_ray_machine:
+                    yield x_ray_machine
+
+                    # Time for x_ray to complete
+                    yield self.env.timeout(10)
+
+                    self.x_ray_machine.release(x_ray_machine)
+
+                    # Assign CTAS level
+                    patient.ctas_level = patient.get_ctas_level()
+
+                    # Release nurse and send to triage doc
+                    self.nurse.release(nurse_request)
+
+
     def get_urine_test(self, patient):
         print(f"Patient{patient.id} arrives for urine test")
         with self.nurse.request() as nurse_request:
@@ -90,6 +117,9 @@ class ERSim:
 
             blood_test_time = np.random.randint(0, 10)
             yield self.env.timeout(blood_test_time)
+
+            # Assign CTAS level
+            patient.ctas_level = patient.get_ctas_level()
 
             self.nurse.release(nurse_request)
 
@@ -108,14 +138,11 @@ class ERSim:
                 # Send patient to ED
                 yield self.env.timeout(1)
 
+                # Assign CTAS level
+                patient.ctas_level = patient.get_ctas_level()
+
                 self.doctor.release(doctor_request)
                 self.admin_staff.release(admin_staff_request)
-
-        # with self.nurse.request() as nurse_request:
-        #     yield nurse_request
-        #
-        #
-        #     self.nurse.release(nurse_request)
 
     def get_diagnostic_tests(self, patient):
         diag_tests = np.random.randint(0, 7)
@@ -130,13 +157,30 @@ class ERSim:
                 elif index == 1:
                     print(f"Send patient{patient.id} for urine test")
                     yield self.env.process(self.get_urine_test(patient))
-                # elif index == 2:
-                #     print(f"Send patient{patient.id} for XRay test")
-                #     yield self.env.process(self.get_x_ray(patient))
+                elif index == 2:
+                    print(f"Send patient{patient.id} for XRay test")
+                    yield self.env.process(self.get_x_ray(patient))
 
     def get_arrival_ctas(self, patient):
         patient.ctas_level = random.choices([1, 2, 3, 4, 5], weights=[1, 1, 2, 3, 3])
         yield self.env.timeout(3)
+
+    def get_consultation(self, patient):
+        if patient.ctas_level == 1 or patient.ctas_level == 2:
+            # should be efficient with less/more time/more skill
+            # TODO: Consultation for CTAS I-II patients
+            pass
+        else:
+            with self.consultant.request() as consultant_request:
+                yield consultant_request
+
+                # Time for consultation
+                yield self.env.timeout(5)
+
+                # Re-triage to higher CTAS
+                patient.ctas_level = random.choices([3, 4, 5], weights=[3, 3, 4])
+
+                self.consultant.release(consultant_request)
 
     def triage_process(self, patient):
         print(f"Patient{patient.id} sent to triage waiting room")
@@ -163,7 +207,7 @@ class ERSim:
                 # send to registration desk
                 yield self.env.process(self.enter_registration_counter())
 
-                # Re-enters the triage process
+                # Re-enters the triage process - Diagnostic tests
                 print(f"Patient{patient.id} in triage waiting room")
                 yield self.env.process(self.enter_triage_waiting_room(patient))
 
@@ -176,7 +220,11 @@ class ERSim:
                     self.triage_waiting_room.remove(patient.id)
                     print(f"Triage waiting room: {self.triage_waiting_room}")
 
-                    yield self.env.process(self.get_triage_time("Diagnostic"))
+                    # Nurse assesses the patient and sends to diagnostics
+                    yield self.env.timeout(5)
+
+                    # release nurse and send to triage treatment or ed
+                    self.nurse.release(nurse_request)
 
                     # Process 1: get diagnostic tests done
                     # Subprocess 1
@@ -184,13 +232,13 @@ class ERSim:
                     yield self.env.process(self.get_diagnostic_tests(patient))
                     print(f"Patient{patient.id} back from diagnostics.", self.env.now)
 
-                    # Process 2: get CTAS level
-                    patient.ctas_level = patient.get_ctas_level()
+                    # Process 2: get CTAS level.
+                    # CTAS level can also be given while diagnostics are getting done
+                    if patient.ctas_level is None:
+                        patient.ctas_level = patient.get_ctas_level()
+
                     print(f"Patient{patient.id} triage diagnostic complete")
                     print(f"Patient{patient.id} CTAS level {patient.ctas_level}")
-
-                    # release nurse and send to triage treatment or ed
-                    self.nurse.release(nurse_request)
 
                     if patient.ctas_level == 5:
                         # Send to triage doctor
@@ -217,16 +265,32 @@ class ERSim:
             assessment_time = np.random.exponential(1)
             yield self.env.timeout(assessment_time)
 
-            # Not implementing the review stage for now.
-            # review = patient.get_triage_treatment_review()
-            # if review:
-            #     print("Re-triage to higher category")
-            #     patient.ctas_level = random.randint(2, 4)
-            # else:
+            # Medication time
+            # Wait for nurse
+            with self.nurse.request() as nurse_request:
+                yield nurse_request
+
+                yield self.env.process(self.give_medication(patient))
+
+                self.nurse.release(nurse_request)
+
+            # Review/Consultation step
+            # Patient can be re-triaged to higher CTAS level
+            consultation = np.random.randint(0, 1)
+
+            if consultation:
+                yield self.env.process(self.get_consultation(patient))
+
+                # If re-triaged send to ED
+                if patient.ctas_level < 5:
+                    # Release triage doctor
+                    self.doctor.release(doctor_request)
+                    self.env.process(self.ed_process(patient))
 
             # Treatment complete; release doctor
             self.doctor.release(doctor_request)
 
+            # Discharge patient
             patient.leave_time = self.env.now
             self.patients_processed += 1
 
@@ -292,6 +356,9 @@ class ERSim:
             yield self.env.timeout(assessment_time)
 
             # Check diagnostics required (At this time subprocess not created)
+            # Subprocess 2
+            # IDK why is this required 2 times in the same pipeline.
+            # TODO: Subprocess 2
             # if diagnostic_required == "Yes":
             #     pass
 
@@ -328,10 +395,14 @@ class ERSim:
                 # Start inpatient process/treatment
                 self.env.process(self.inpatient_process(patient))
             else:
-                # Wait for diagnostic results/investigation
-                # IDK but the diagnosis wasn't required in earlier steps.
-                # maybe re-request diagnostics here.
+                # Perform diagnosis/investigation
+                # Subprocess 2 (different from subprocess 1)
+                # see, required again!
+                # TODO: Subprocess 2
                 print("Wait for results")
+
+                patient.leave_time = self.env.now
+                self.patients_processed += 1
                 # exit()
 
     def enter_inpatient_waiting_room(self, patient):
@@ -367,6 +438,7 @@ class ERSim:
             else:
                 # Release doctor and after waiting call senior doctor
                 # check how to manage doctor skill level
+                # TODO: skill set for doctors and nurses.
                 yield self.env.process(self.enter_ed_waiting_room())
                 self.ed_waiting_room.remove(patient.id)
 
@@ -434,9 +506,10 @@ class ERSim:
 
                     if patient.ctas_level == 1:
                         # Send to resuscitation room
+                        # TODO: Create resuscitation room
                         pass
 
-                    # Attend tot he patient
+                    # Attend to the patient
                     yield self.env.timeout(3)
 
                     # Send for diagnostic tests
@@ -451,9 +524,12 @@ class ERSim:
                         yield self.env.process(self.get_diagnostic_tests(patient))
 
                     # If external consultation needed
-                    # Do not include for now
-                    # Else send to inpatient process
+                    consultation = np.random.randint(0, 1)
 
+                    if consultation:
+                        yield self.env.process(self.get_consultation(patient))
+
+                    # Else send to inpatient process
                     # release docs and nurses and send for
                     self.nurse.release(nurse_request)
                     self.doctor.release(doctor_request)
@@ -465,7 +541,7 @@ class ERSim:
                     self.nurse.release(nurse_request)
                     self.doctor.release(doctor_request)
 
-                    print(f"Patient{patient.id} not in CTAS I")
+                    print(f"Patient{patient.id} not in CTAS I or II")
                     print("Entering triage process")
                     yield self.env.process(self.triage_process(patient))
 
