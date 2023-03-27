@@ -36,7 +36,7 @@ class ERSim:
 
         self.medication = simpy.Container(self.env, init=0)
         self.blood_tubes = simpy.Container(self.env, capacity=30)
-        self.stationary = simpy.Container(self.env, capacity=30)
+        # self.stationary = simpy.Container(self.env, capacity=30)
         self.patients_processed = 0
 
     def run_simulation(self):
@@ -144,43 +144,84 @@ class ERSim:
                 self.doctor.release(doctor_request)
                 self.admin_staff.release(admin_staff_request)
 
-    def get_diagnostic_tests(self, patient):
-        diag_tests = np.random.randint(0, 7)
-        diag_tests = f"{diag_tests:2b}"
-        print(diag_tests)
-        for index, val in enumerate(diag_tests):
-            if val == "1":
-                if index == 0:
-                    print(f"Send patient{patient.id} for ECG test")
-                    yield self.env.process(self.get_ecg_test(patient))
-                    print("ECG complete. Send back to get CTAS results")
-                elif index == 1:
-                    print(f"Send patient{patient.id} for urine test")
-                    yield self.env.process(self.get_urine_test(patient))
-                elif index == 2:
-                    print(f"Send patient{patient.id} for XRay test")
-                    yield self.env.process(self.get_x_ray(patient))
+    def get_blood_test(self, patient):
+        print("Looking for blood tubes")
+        if self.blood_tubes < 1:
+            print(f"Blood tubes not available not available")
+
+            # Time to get the blood tubes
+            yield self.env.timeout(1)
+            self.medication.put(1)
+            print(f"Blood tubes now available")
+
+            # Take blood sample
+            yield self.medication.get(1)
+        else:
+            print(f"Medication available")
+            yield self.medication.get(1)
+
+        # Blood sample taken.
+        # Get stationary - skip this useless part.
+        # Fill form and wait for resutls
+
+        # TODO: complete this.
+
+    def get_diagnostic_tests(self, patient, department):
+        if department == "Triage":
+            triage_diag_tests = np.random.randint(0, 7)
+            triage_diag_tests = f"{triage_diag_tests:2b}"
+            print(triage_diag_tests)
+
+            for index, val in enumerate(triage_diag_tests):
+                if val == "1":
+                    if index == 0:
+                        print(f"Send patient{patient.id} for ECG test")
+                        yield self.env.process(self.get_ecg_test(patient))
+                        print("ECG complete. Send back to get CTAS results")
+                    elif index == 1:
+                        print(f"Send patient{patient.id} for urine test")
+                        yield self.env.process(self.get_urine_test(patient))
+                    elif index == 2:
+                        print(f"Send patient{patient.id} for XRay test")
+                        yield self.env.process(self.get_x_ray(patient))
+        if department == "ED":
+            # Doctor always needed for ED diagnostic tests!
+            ed_diag_tests = np.random.randint(0, 1)
+            ed_diag_tests = f"{ed_diag_tests:2b}"
+            print(ed_diag_tests)
+
+            for index, val in enumerate(ed_diag_tests):
+                if val == "1":
+                    if index == 0:
+                        print(f"Send patient{patient.id} for blood test")
+                        yield self.env.process(self.get_blood_test(patient))
+                    elif index == 1:
+                        print(f"Send patient{patient.id} for radiological test")
+                        yield self.env.process(self.get_radiological_test(patient))
+
 
     def get_arrival_ctas(self, patient):
         patient.ctas_level = random.choices([1, 2, 3, 4, 5], weights=[1, 1, 2, 3, 3])
         yield self.env.timeout(3)
 
     def get_consultation(self, patient):
-        if patient.ctas_level == 1 or patient.ctas_level == 2:
-            # should be efficient with less/more time/more skill
-            # TODO: Consultation for CTAS I-II patients
-            pass
-        else:
-            with self.consultant.request() as consultant_request:
-                yield consultant_request
+        with self.consultant.request() as consultant_request:
+            yield consultant_request
 
+            if patient.ctas_level == 1 or patient.ctas_level == 2:
+                # should be efficient with less/more time/more skill
+                # Consultation for CTAS I-II patients
+
+                # Time for consultation
+                yield self.env.timeout(5)
+            else:
                 # Time for consultation
                 yield self.env.timeout(5)
 
                 # Re-triage to higher CTAS
                 patient.ctas_level = random.choices([3, 4, 5], weights=[3, 3, 4])
 
-                self.consultant.release(consultant_request)
+            self.consultant.release(consultant_request)
 
     def triage_process(self, patient):
         print(f"Patient{patient.id} sent to triage waiting room")
@@ -500,10 +541,13 @@ class ERSim:
                 # Yield nurse for first (arrival) triage determination
                 yield self.env.process(self.get_arrival_ctas())
 
+                # if patient.ctas_level == 1 or patient.ctas_level == 2:
                 if patient.ctas_level == 1 or patient.ctas_level == 2:
                     # CTAS 1 - Send patient the other way
                     print(f"Patient{patient.id} CTAS I")
 
+                    # If CTAS-I take to resuscitation room then send for tests.
+                    # Else directly attend and send for tests.
                     if patient.ctas_level == 1:
                         # Send to resuscitation room
                         # TODO: Create resuscitation room
@@ -512,29 +556,35 @@ class ERSim:
                     # Attend to the patient
                     yield self.env.timeout(3)
 
-                    # Send for diagnostic tests
-                    yield self.env.process(self.get_diagnostic_tests(patient))
+                    # Send for ED diagnostic tests
+                    yield self.env.process(self.get_diagnostic_tests(patient, "ED"))
 
-                    # Review diagnostic results
+                    # Review diagnostic results - Check if needed
+                    # TODO: check if this timeout is needed here
+                    # or prefer to include in ed tests function itself.
                     yield self.env.timeout(6)
 
+                    # If further tests required send to subprocess 2
+                    # i.e. ed_diag_tests
+                    # Else check if consultation needed
                     further_tests = np.random.randint(0, 1)
 
                     if further_tests == 1:
-                        yield self.env.process(self.get_diagnostic_tests(patient))
+                        yield self.env.process(self.get_diagnostic_tests(patient, "ED"))
+                    else:
+                        # Check if external consultation needed
+                        # Else send to inpatient doctor.
+                        consultation = np.random.randint(0, 1)
 
-                    # If external consultation needed
-                    consultation = np.random.randint(0, 1)
+                        if consultation:
+                            yield self.env.process(self.get_consultation(patient))
+                        else:
+                            # Else send to inpatient process
+                            # release docs and nurses and send for
+                            self.nurse.release(nurse_request)
+                            self.doctor.release(doctor_request)
 
-                    if consultation:
-                        yield self.env.process(self.get_consultation(patient))
-
-                    # Else send to inpatient process
-                    # release docs and nurses and send for
-                    self.nurse.release(nurse_request)
-                    self.doctor.release(doctor_request)
-
-                    self.env.process(self.inpatient_process(patient))
+                            self.env.process(self.inpatient_process(patient))
 
                 else:
                     # Release nurse, doctor and start triage process
