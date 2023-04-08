@@ -9,7 +9,7 @@ class Patient:
 
     patient_count = 0
 
-    def __init__(self, arrival_time, service_time, waiting_time=0,
+    def __init__(self, arrival_time, service_time,
                  leave_time=0, ctas_level=None, tests=None,
                  bed_assigned=None):
         self.env = simpy.Environment()
@@ -19,9 +19,11 @@ class Patient:
 
         self.arrival_time = arrival_time
         self.service_time = service_time
-        self.waiting_time = waiting_time
+        self.triage_waiting_time = 0
+        self.ed_waiting_time = 0
+        self.medication_waiting_time = 0
+        self.inpatient_waiting_time = 0
         self.leave_time = leave_time
-
         self.ctas_level = ctas_level
         self.tests = tests
         # self.bed_assigned = bed_assigned

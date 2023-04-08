@@ -33,6 +33,7 @@ class ERSim:
         self.triage_waiting_room = []
         self.ed_waiting_room = []
         self.medication_waiting_room = []
+        self.inpatient_waiting_room = []
 
         self.medication = simpy.Container(self.env, init=0)
         self.blood_tubes = simpy.Container(self.env, capacity=30)
@@ -46,7 +47,16 @@ class ERSim:
     def generate_patients(self):
         while True:
             print(f"Patient produced")
-            inter_arrival_time = random.expovariate(1 / 6)
+
+            # Check probability of CTAS I-III or IV-V
+            weights = [0.6186, 0.3814]
+            ctas_level = random.choices([1, 2], weights=weights)[0]
+
+            if ctas_level:
+                inter_arrival_time = random.expovariate(6.6)
+            else:
+                inter_arrival_time = random.expovariate(2.83)
+
             service_time = random.expovariate(1)
             ERSim.patient_count += 1
             patient = Patient(self.env.now, service_time)
@@ -70,13 +80,6 @@ class ERSim:
         print(f"Patient{patient.id} enters triage waiting room")
         self.triage_waiting_room.append(patient.id)
         print(f"Triage waiting room: {self.triage_waiting_room}")
-
-        triage_waiting_time = np.random.exponential(1)
-
-        patient.waiting_time += triage_waiting_time
-
-        # Yield triage waiting time.
-        yield self.env.timeout(triage_waiting_time)
 
     def get_triage_time(self, scale):
         if scale == "Screening":
@@ -108,7 +111,6 @@ class ERSim:
 
                     # Release nurse and send to triage doc
                     self.nurse.release(nurse_request)
-
 
     def get_urine_test(self, patient):
         print(f"Patient{patient.id} arrives for urine test")
@@ -199,7 +201,6 @@ class ERSim:
                         print(f"Send patient{patient.id} for radiological test")
                         yield self.env.process(self.get_radiological_test(patient))
 
-
     def get_arrival_ctas(self, patient):
         patient.ctas_level = random.choices([1, 2, 3, 4, 5], weights=[1, 1, 2, 3, 3])
         yield self.env.timeout(3)
@@ -225,7 +226,8 @@ class ERSim:
 
     def triage_process(self, patient):
         print(f"Patient{patient.id} sent to triage waiting room")
-        yield self.env.process(self.enter_triage_waiting_room(patient))
+        time_enter_waiting_room = self.env.now
+        self.enter_triage_waiting_room(patient)
 
         with self.nurse.request() as nurse_request:
             yield nurse_request
@@ -233,6 +235,9 @@ class ERSim:
             # Pop patient out from triage waiting room
             print(f"Removing patient {patient.id} from triage waiting room")
             self.triage_waiting_room.remove(patient.id)
+
+            time_exit_waiting_room = self.env.now
+            patient.triage_waiting_time += (time_exit_waiting_room - time_enter_waiting_room)
 
             # Wait for triage service time
             yield self.env.process(self.get_triage_time("Screening"))
@@ -250,7 +255,8 @@ class ERSim:
 
                 # Re-enters the triage process - Diagnostic tests
                 print(f"Patient{patient.id} in triage waiting room")
-                yield self.env.process(self.enter_triage_waiting_room(patient))
+                self.enter_triage_waiting_room(patient)
+                time_enter_waiting_room = self.env.now
 
                 # Re-assign nurse
                 with self.nurse.request() as nurse_request:
@@ -261,6 +267,9 @@ class ERSim:
                     self.triage_waiting_room.remove(patient.id)
                     print(f"Triage waiting room: {self.triage_waiting_room}")
 
+                    time_exit_waiting_room = self.env.now
+                    patient.triage_waiting_time += (time_exit_waiting_room - time_enter_waiting_room)
+
                     # Nurse assesses the patient and sends to diagnostics
                     yield self.env.timeout(5)
 
@@ -270,7 +279,7 @@ class ERSim:
                     # Process 1: get diagnostic tests done
                     # Subprocess 1
                     print("Enter subprocess 1: Get diagnostic results", self.env.now)
-                    yield self.env.process(self.get_diagnostic_tests(patient))
+                    yield self.env.process(self.get_diagnostic_tests(patient, "Triage"))
                     print(f"Patient{patient.id} back from diagnostics.", self.env.now)
 
                     # Process 2: get CTAS level.
@@ -341,7 +350,7 @@ class ERSim:
         print(f"Medication waiting room: {self.medication_waiting_room}")
 
         medication_waiting_time = 3
-        patient.waiting_time += medication_waiting_time
+        patient.medication_waiting_time += medication_waiting_time
 
         return medication_waiting_time
 
@@ -372,17 +381,10 @@ class ERSim:
         self.ed_waiting_room.append(patient.id)
         print(f"ED waiting room: {self.ed_waiting_room}")
 
-        ed_waiting_time = np.random.exponential(5)
-        # ed_waiting_time = 0.1
-
-        patient.waiting_time += ed_waiting_time
-
-        # Yield triage waiting time.
-        yield self.env.timeout(ed_waiting_time)
-
     def ed_process(self, patient):
         print(f"Patient{patient.id} arrives in ED")
-        yield self.env.process(self.enter_ed_waiting_room(patient))
+        self.enter_ed_waiting_room(patient)
+        time_enter_waiting_room = self.env.now
 
         with self.doctor.request() as doctor_request:
             yield doctor_request
@@ -390,6 +392,9 @@ class ERSim:
             # Pop patient from ED waiting room list
             self.ed_waiting_room.remove(patient.id)
             print(f"ED waiting room: {self.ed_waiting_room}")
+
+            time_exit_waiting_room = self.env.now
+            patient.ed_waiting_time += (time_exit_waiting_room - time_enter_waiting_room)
 
             print(f"Doctor assigned to Patient{patient.id} in ED treament")
             print(f"Performing assessment on patient{patient.id} in ED")
@@ -451,20 +456,17 @@ class ERSim:
         self.inpatient_waiting_room.append(patient.id)
         print(f"Inpatient waiting room: {self.inpatient_waiting_room}")
 
-        inpatient_waiting_time = np.random.exponential(1)
-
-        patient.waiting_time += inpatient_waiting_time
-
-        # Yield triage waiting time.
-        yield self.env.timeout(inpatient_waiting_time)
-
     def inpatient_process(self, patient):
-        yield self.env.process(self.enter_inpatient_waiting_room(patient))
+        self.enter_inpatient_waiting_room(patient)
+        time_enter_waiting_room = self.env.now
 
         with self.doctor.request() as doctor_request:
             yield doctor_request
 
             self.inpatient_waiting_room.remove(patient.id)
+
+            time_exit_waiting_room = self.env.now
+            patient.inpatient_waiting_time += (time_exit_waiting_room - time_enter_waiting_room)
 
             # Check patient and decide to admit
             admit = np.random.randint(0, 1)
@@ -480,11 +482,15 @@ class ERSim:
                 # Release doctor and after waiting call senior doctor
                 # check how to manage doctor skill level
                 # TODO: skill set for doctors and nurses.
-                yield self.env.process(self.enter_ed_waiting_room())
-                self.ed_waiting_room.remove(patient.id)
+                self.enter_ed_waiting_room()
+                time_enter_waiting_room = self.env.now
 
                 with self.doctor.request() as doctor_request:
                     yield doctor_request
+
+                    self.ed_waiting_room.remove(patient.id)
+                    time_exit_waiting_room = self.env.now
+                    patient.ed_waiting_time += (time_exit_waiting_room - time_enter_waiting_room)
 
                 review_time = np.random.exponential(1)
                 yield self.env.timeout(review_time)
@@ -539,10 +545,10 @@ class ERSim:
                 yield nurse_request
 
                 # Yield nurse for first (arrival) triage determination
-                yield self.env.process(self.get_arrival_ctas())
+                yield self.env.process(self.get_arrival_ctas(patient))
 
                 # if patient.ctas_level == 1 or patient.ctas_level == 2:
-                if patient.ctas_level == 1 or patient.ctas_level == 2:
+                if patient.ctas_level == 1:
                     # CTAS 1 - Send patient the other way
                     print(f"Patient{patient.id} CTAS I")
 
@@ -600,11 +606,13 @@ def file_output(patient):
     f = open("simulation_results.csv", "a")
     f.write(f"{patient.id},{patient.ctas_level},{patient.tests},"
             f"{patient.arrival_time},{patient.leave_time},"
-            f"{patient.waiting_time}\n")
+            f"{patient.triage_waiting_time}, {patient.ed_waiting_time},"
+            f"{patient.medication_waiting_time}, {patient.inpatient_waiting_time}\n")
     f.close()
 
 
 if __name__ == "__main__":
+    # sim = ERSim(20, 30, 10, 10, 43800)
     sim = ERSim(20, 30, 10, 10, 100)
     sim.run_simulation()
 
