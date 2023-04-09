@@ -34,6 +34,10 @@ class ERSim:
         self.ed_waiting_room = []
         self.medication_waiting_room = []
         self.inpatient_waiting_room = []
+        self.triage_waiting_room_len = 0
+        self.ed_waiting_room_len = 0
+        self.medication_waiting_room_len = 0
+        self.inpatient_waiting_room_len = 0
 
         self.medication = simpy.Container(self.env, init=0)
         self.blood_tubes = simpy.Container(self.env, capacity=30)
@@ -53,9 +57,13 @@ class ERSim:
             ctas_level = random.choices([1, 2], weights=weights)[0]
 
             if ctas_level:
-                inter_arrival_time = random.expovariate(6.6)
+                # inter_arrival_time = random.expovariate(6.6)
+                inter_arrival_time = random.expovariate(1.6)
+                # inter_arrival_time = random.expovariate(0.67)
             else:
-                inter_arrival_time = random.expovariate(2.83)
+                # inter_arrival_time = random.expovariate(2.83)
+                inter_arrival_time = random.expovariate(1)
+                # inter_arrival_time = random.expovariate(0.046)
 
             service_time = random.expovariate(1)
             ERSim.patient_count += 1
@@ -71,7 +79,7 @@ class ERSim:
         with self.admin_staff.request() as admin_staff_request:
             yield admin_staff_request
 
-            registration_time = random.randint(0, 1)
+            registration_time = 1
             yield self.env.timeout(registration_time)
 
             self.admin_staff.release(admin_staff_request)
@@ -81,11 +89,14 @@ class ERSim:
         self.triage_waiting_room.append(patient.id)
         print(f"Triage waiting room: {self.triage_waiting_room}")
 
+        # Max waiting room len
+        self.triage_waiting_room_len = max(self.triage_waiting_room_len, len(self.triage_waiting_room))
+
     def get_triage_time(self, scale):
         if scale == "Screening":
-            yield self.env.timeout(random.randint(5, 10))
+            yield self.env.timeout(3)
         elif scale == "Diagnostic":
-            yield self.env.timeout(random.randint(5, 10))
+            yield self.env.timeout(3)
 
     def get_x_ray(self, patient):
         with self.doctor.request() as doctor_request:
@@ -102,7 +113,7 @@ class ERSim:
                     yield x_ray_machine
 
                     # Time for x_ray to complete
-                    yield self.env.timeout(10)
+                    yield self.env.timeout(5)
 
                     self.x_ray_machine.release(x_ray_machine)
 
@@ -117,7 +128,7 @@ class ERSim:
         with self.nurse.request() as nurse_request:
             yield nurse_request
 
-            blood_test_time = np.random.randint(0, 10)
+            blood_test_time = 5
             yield self.env.timeout(blood_test_time)
 
             # Assign CTAS level
@@ -138,7 +149,7 @@ class ERSim:
 
                 # Doctor signs the ECG report
                 # Send patient to ED
-                yield self.env.timeout(1)
+                # yield self.env.timeout(1)
 
                 # Assign CTAS level
                 patient.ctas_level = patient.get_ctas_level()
@@ -271,7 +282,7 @@ class ERSim:
                     patient.triage_waiting_time += (time_exit_waiting_room - time_enter_waiting_room)
 
                     # Nurse assesses the patient and sends to diagnostics
-                    yield self.env.timeout(5)
+                    # yield self.env.timeout(5)
 
                     # release nurse and send to triage treatment or ed
                     self.nurse.release(nurse_request)
@@ -312,7 +323,7 @@ class ERSim:
 
             print(f"Doctor assigned to Patient{patient.id} in triage treatment")
 
-            assessment_time = np.random.exponential(1)
+            assessment_time = random.expovariate(1)
             yield self.env.timeout(assessment_time)
 
             # Medication time
@@ -349,6 +360,9 @@ class ERSim:
         self.medication_waiting_room.append(patient.id)
         print(f"Medication waiting room: {self.medication_waiting_room}")
 
+        # Max waiting room len
+        self.medication_waiting_room_len = max(self.medication_waiting_room_len, len(self.medication_waiting_room))
+
         medication_waiting_time = 3
         patient.medication_waiting_time += medication_waiting_time
 
@@ -381,6 +395,9 @@ class ERSim:
         self.ed_waiting_room.append(patient.id)
         print(f"ED waiting room: {self.ed_waiting_room}")
 
+        # Max waiting room len
+        self.ed_waiting_room_len = max(self.ed_waiting_room_len, len(self.ed_waiting_room))
+
     def ed_process(self, patient):
         print(f"Patient{patient.id} arrives in ED")
         self.enter_ed_waiting_room(patient)
@@ -409,7 +426,7 @@ class ERSim:
             #     pass
 
             # else perform procedure on patient and give medication
-            procedure_time = np.random.exponential(1)
+            procedure_time = random.expovariate(1)
             yield self.env.timeout(procedure_time)
 
             # give medication
@@ -456,6 +473,9 @@ class ERSim:
         self.inpatient_waiting_room.append(patient.id)
         print(f"Inpatient waiting room: {self.inpatient_waiting_room}")
 
+        # Max waiting room len
+        self.inpatient_waiting_room_len = max(self.inpatient_waiting_room_len, len(self.inpatient_waiting_room))
+
     def inpatient_process(self, patient):
         self.enter_inpatient_waiting_room(patient)
         time_enter_waiting_room = self.env.now
@@ -492,7 +512,7 @@ class ERSim:
                     time_exit_waiting_room = self.env.now
                     patient.ed_waiting_time += (time_exit_waiting_room - time_enter_waiting_room)
 
-                review_time = np.random.exponential(1)
+                review_time = random.expovariate(1)
                 yield self.env.timeout(review_time)
 
                 # Treatment complete; release doctor
@@ -520,8 +540,8 @@ class ERSim:
                     self.admin_staff.release(admin_staff_request)
 
                     # Nurse helps transfer out of ED - ed_depart
-                    ed_depart_time = np.random.uniform(20, 40)
-                    yield self.env.timeout(ed_depart_time)
+                    # ed_depart_time = np.random.uniform(20, 40)
+                    # yield self.env.timeout(ed_depart_time)
 
                     self.nurse.release(nurse_request)
 
@@ -534,7 +554,7 @@ class ERSim:
                     self.env.process(self.release_beds(patient))
 
     def release_beds(self, patient):
-        yield self.env.timeout(np.random.exponential(1))
+        yield self.env.timeout(random.expovariate(1))
 
     def patient_flow(self, patient):
         print(f"Patient{patient.id} enters the hospital")
@@ -602,22 +622,27 @@ class ERSim:
                     yield self.env.process(self.triage_process(patient))
 
 
-def file_output(patient):
+def file_output(sim, patient):
     f = open("simulation_results.csv", "a")
+    if type(patient.ctas_level) == list:
+        patient.ctas_level = patient.ctas_level[0]
     f.write(f"{patient.id},{patient.ctas_level},{patient.tests},"
-            f"{patient.arrival_time},{patient.leave_time},"
+            f"{patient.arrival_time},{patient.leave_time}, {patient.leave_time - patient.arrival_time},"
             f"{patient.triage_waiting_time}, {patient.ed_waiting_time},"
-            f"{patient.medication_waiting_time}, {patient.inpatient_waiting_time}\n")
+            f"{patient.medication_waiting_time}, {patient.inpatient_waiting_time},"
+            f"{sim.triage_waiting_room_len}, {sim.ed_waiting_room_len},"
+            f"{sim.medication_waiting_room_len}, {sim.inpatient_waiting_room_len}\n")
     f.close()
 
 
 if __name__ == "__main__":
-    # sim = ERSim(20, 30, 10, 10, 43800)
-    sim = ERSim(20, 30, 10, 10, 100)
+    # sim = ERSim(20, 30, 10, 10, 43800) # minutes in month
+    sim = ERSim(30, 50, 20, 20, 10080) # minutes in week
+    # sim = ERSim(30, 50, 20, 20, 100)
     sim.run_simulation()
 
     for patient in sim.patients:
-        file_output(patient)
+        file_output(sim, patient)
 
     # for patient in sim.patients:
     #     # print(f"Patient {patient.id} waiting time = {patient.waiting_time}")
@@ -625,7 +650,7 @@ if __name__ == "__main__":
     #
     # Print the results
     print(f"Patients processed: {sim.patients_processed}")
-    print(sim.patients_processed, sim.sim_time)
+    print(sim.patients_processed, sim.sim_time, sim.patient_count)
     # if sim.patients_processed == None:
     #     print(f"No info about num patients processed received")
     #
