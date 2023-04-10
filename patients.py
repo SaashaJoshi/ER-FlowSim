@@ -9,8 +9,8 @@ class Patient:
 
     patient_count = 0
 
-    def __init__(self, arrival_time, service_time,
-                 leave_time=0, ctas_level=None, tests=None,
+    def __init__(self, arrival_time,
+                 leave_time=0, ctas_level=None,
                  bed_assigned=None):
         self.env = simpy.Environment()
 
@@ -18,18 +18,18 @@ class Patient:
         self.id = Patient.patient_count
 
         self.arrival_time = arrival_time
-        self.service_time = service_time
+        # self.service_time = service_time
         self.triage_waiting_time = 0
         self.ed_waiting_time = 0
         self.medication_waiting_time = 0
         self.inpatient_waiting_time = 0
         self.leave_time = leave_time
         self.ctas_level = ctas_level
-        self.tests = tests
+        self.tests = []
         # self.bed_assigned = bed_assigned
 
     def get_ctas_level(self):
-        return random.randint(1, 5)
+        return int(random.randint(1, 5))
 
     def get_triage_treatment_review(self):
         return random.randint(0, 1)
