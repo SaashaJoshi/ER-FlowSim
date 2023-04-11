@@ -723,7 +723,7 @@ class ERSim:
 
 
 def file_output(sim):
-    f = open("simulation_results.csv", "a")
+    f = open("results/simulation_results_system_1_5.csv", "a")
 
     f.write("Patient ID, CTAS Level, Tests, "
             "Arrival Time, Departure Time, LOS, "
@@ -745,11 +745,12 @@ def file_output(sim):
 
 
 if __name__ == "__main__":
-    sim = ERSim(100, 100, 50, 70, 50, 43800, 100) # minutes in month NOT BAD!!!!
+    # sim = ERSim(100, 100, 50, 70, 50, 43800, 100) # minutes in month NOT BAD!!!!
     # sim = ERSim(20, 30, 10, 10, 10080) # minutes in week
     # sim = ERSim(100, 100, 100, 100, 1000)
-
+    sim = ERSim(100, 100, 50, 70, 50, 10080, 35)
     # sim = ERSim(30, 50, 1, 10, 5, 2880, 100)  # minutes in 2 days
+    # sim = ERSim(50, 50, 50, 50, 20, 10080, 100)  # minutes in week PERFECT!
     sim.run_simulation()
 
     # sim = ERSim(50, 50, 50, 50, 20, 10080, 100)  # minutes in week PERFECT!
