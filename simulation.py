@@ -12,7 +12,7 @@ class ERSim:
 
     patient_count = 0
 
-    def __init__(self, num_doctors, num_nurses, num_beds, num_admin_staff, num_consultants, sim_time, seed=100):
+    def __init__(self, num_doctors, num_nurses, num_admin_staff, num_consultants, num_beds, sim_time, seed):
 
         random.seed(seed)
         self.env = simpy.Environment()
@@ -28,9 +28,9 @@ class ERSim:
         self.consultant = simpy.Resource(self.env, capacity=num_consultants)
 
         self.bed = simpy.Resource(self.env, capacity=num_beds)
-        self.ecg_machine = simpy.Resource(self.env, capacity=5)
-        self.ct_machine = simpy.Resource(self.env, capacity=5)
-        self.x_ray_machine = simpy.Resource(self.env, capacity=5)
+        self.ecg_machine = simpy.Resource(self.env, capacity=10)
+        self.ct_machine = simpy.Resource(self.env, capacity=10)
+        self.x_ray_machine = simpy.Resource(self.env, capacity=10)
 
         self.inter_arrival_time = 0
         self.triage_waiting_room = []
@@ -42,9 +42,8 @@ class ERSim:
         self.medication_waiting_room_len = 0
         self.inpatient_waiting_room_len = 0
 
-        self.medication = simpy.Container(self.env, init=0)
-        self.blood_tubes = simpy.Container(self.env, capacity=30)
-        # self.stationary = simpy.Container(self.env, capacity=30)
+        self.medication = simpy.Container(self.env, init=25)
+        self.blood_tubes = simpy.Container(self.env, capacity=25)
         self.patients_processed = 0
 
     def run_simulation(self):
@@ -57,20 +56,17 @@ class ERSim:
         while True:
             print("Patient produced")
 
+            # Constant inter-arrival times
+            self.inter_arrival_time = random.expovariate(2.7)
+
+            # Inter-arrival times according to CTAS level.
             # Check probability of CTAS I-III or IV-V
-            weights = [0.6186, 0.3814]
-            ctas_level = random.choices([1, 2], weights=weights)[0]
-            # self.inter_arrival_time = random.expovariate(1.66)
-            if ctas_level == 1:
-                self.inter_arrival_time = random.expovariate(1.66)
-                # self.inter_arrival_time = random.expovariate(6.6)
-                # self.inter_arrival_time = random.expovariate(4)
-                # self.inter_arrival_time = random.expovariate(0.67)
-            elif ctas_level == 2:
-                # self.inter_arrival_time = random.expovariate(6.6)
-                self.inter_arrival_time = random.expovariate(1.2)
-                # self.inter_arrival_time = random.expovariate(2)
-                # self.inter_arrival_time = random.expovariate(0.046)
+            # weights = [0.2062, 0.2062, 0.2062, 0.1907, 0.1907]
+            # ctas_level = random.choices([1, 2, 3, 4, 5], weights=weights)[0]
+            # if ctas_level in [1, 2, 3]:
+            #     self.inter_arrival_time = random.expovariate(1.66)
+            # elif ctas_level in [4, 5]:
+            #     self.inter_arrival_time = random.expovariate(1.0)
 
             ERSim.patient_count += 1
             patient = Patient(self.env.now)
@@ -95,7 +91,7 @@ class ERSim:
         self.triage_waiting_room.append(patient.id)
         print(f"Triage waiting room: {self.triage_waiting_room}")
 
-        # Max waiting room len
+        # Max waiting room length
         self.triage_waiting_room_len = max(self.triage_waiting_room_len, len(self.triage_waiting_room))
         yield self.env.timeout(0)
 
@@ -115,7 +111,6 @@ class ERSim:
                 # Doctor approves need for an X-ray
                 # yield self.env.timeout(3)
 
-                # Should I call a nurse here or admin staff?
                 with self.nurse.request() as nurse_request:
                     yield nurse_request
 
@@ -168,7 +163,6 @@ class ERSim:
         with self.admin_staff.request() as admin_staff_request:
             yield admin_staff_request
 
-            # ecg_time = np.random.randint(10)
             ecg_time = np.random.triangular(45, 55, 60)
             yield self.env.timeout(ecg_time)
 
@@ -207,7 +201,6 @@ class ERSim:
                 yield self.medication.get(1)
 
             # Blood sample taken.
-            # Get stationary - skip this useless part.
             blood_test_time = np.random.triangular(5, 7, 12)
             yield self.env.timeout(blood_test_time)
 
@@ -249,25 +242,21 @@ class ERSim:
         if department == "Triage":
             print(f"Patient{patient.id} getting Triage tests")
             triage_diag_tests = random.choice([0, 1, 2, 3, 4, 5, 6, 7])
-            # triage_diag_tests = random.choice([1, 2, 3])
             triage_diag_tests = f"{triage_diag_tests:2b}"
             print(triage_diag_tests)
 
             for index, val in enumerate(triage_diag_tests):
                 if val == "1":
-                    # if triage_diag_tests == 1:
                     if index == 0:
                         patient.tests.append("Triage ECG")
                         print(f"Send patient{patient.id} for ECG test")
                         yield self.env.process(self.get_ecg_test(patient))
                         print("ECG complete. Send back to get CTAS results")
-                    # elif triage_diag_tests == 2:
                     elif index == 1:
                         patient.tests.append("Triage Urine")
                         print(f"Send patient{patient.id} for urine test")
                         yield self.env.process(self.get_urine_test(patient))
                     elif index == 2:
-                        # elif triage_diag_tests == 3:
                         patient.tests.append("Triage X-Ray")
                         print(f"Send patient{patient.id} for XRay test")
                         yield self.env.process(self.get_x_ray(patient, staff_request=1))
@@ -282,17 +271,14 @@ class ERSim:
             for index, val in enumerate(ed_diag_tests):
                 if val == "1":
                     if index == 0:
-                        # if ed_diag_tests == 0:
                         patient.tests.append("ED Blood Test")
                         print(f"Send patient{patient.id} for blood test")
                         yield self.env.process(self.get_blood_test(patient))
                     elif index == 1:
-                        # elif ed_diag_tests == 1:
                         print(f"Send patient{patient.id} for radiological test")
                         yield self.env.process(self.get_radiological_test(patient))
 
     def get_arrival_ctas(self, patient):
-        # patient.ctas_level = random.choices([1, 2, 3, 4, 5], weights=[1, 1, 2, 3, 3])
         patient.ctas_level = random.choice([0, 1, 2, 3, 4, 5])
         time = np.random.triangular(1, 2, 3)
         yield self.env.timeout(time)
@@ -301,10 +287,8 @@ class ERSim:
         with self.consultant.request() as consultant_request:
             yield consultant_request
 
-            if patient.ctas_level == 1 or patient.ctas_level == 2:
-                # should be efficient with less/more time/more skill
-                # Consultation for CTAS I-II patients
-
+            if patient.ctas_level == 1:
+                # Consultation for CTAS I patients
                 # Time for consultation
                 time = np.random.triangular(10, 15, 30)
                 yield self.env.timeout(time)
@@ -558,13 +542,14 @@ class ERSim:
                 # print("Wait for results")
 
                 # Perform further diagnosis/investigation
-                # Subprocess 2, see, required again!
+                # Subprocess 2, required again!
+
                 # further_investigation = random.choices([0, 1], weights=[9.9, 0.1])
                 # if further_investigation == 1:
                 #     self.doctor.release(doctor_request)
                 #     yield self.env.process(self.get_diagnostic_tests(patient, "ED"))
                 # else:
-                # yield self.env.process(self.get_consultation(patient))
+                #   yield self.env.process(self.get_consultation(patient))
                 self.doctor.release(doctor_request)
 
         disposition_decision = random.randint(0, 1)
@@ -693,12 +678,11 @@ class ERSim:
 
                     # Review diagnostic results
                     # If further tests required send to subprocess 2
-                    # Else check if consultation needed
-                    # further_tests = random.choices([0, 1], weights=[9, 1])
-                    #
-                    # if further_tests == 1:
-                    #     yield self.env.process(self.get_diagnostic_tests(patient, "ED"))
-                    # else:
+                    # Then check if consultation needed
+                    further_tests = random.choices([0, 1], weights=[9, 1])
+
+                    if further_tests == 1:
+                        yield self.env.process(self.get_diagnostic_tests(patient, "ED"))
 
                     # Check if external consultation needed
                     # Else send to inpatient doctor.
@@ -723,7 +707,7 @@ class ERSim:
 
 
 def file_output(sim):
-    f = open("results/simulation_results_system_1_5.csv", "a")
+    f = open("results/simulation_results_system_5_4.csv", "a")
 
     f.write("Patient ID, CTAS Level, Tests, "
             "Arrival Time, Departure Time, LOS, "
@@ -745,27 +729,10 @@ def file_output(sim):
 
 
 if __name__ == "__main__":
-    # sim = ERSim(100, 100, 50, 70, 50, 43800, 100) # minutes in month NOT BAD!!!!
-    # sim = ERSim(20, 30, 10, 10, 10080) # minutes in week
-    # sim = ERSim(100, 100, 100, 100, 1000)
-    sim = ERSim(100, 100, 50, 70, 50, 10080, 35)
-    # sim = ERSim(30, 50, 1, 10, 5, 2880, 100)  # minutes in 2 days
-    # sim = ERSim(50, 50, 50, 50, 20, 10080, 100)  # minutes in week PERFECT!
+    sim = ERSim(100, 100, 70, 10, 10, 43800, 258)
     sim.run_simulation()
-
-    # sim = ERSim(50, 50, 50, 50, 20, 10080, 100)  # minutes in week PERFECT!
 
     file_output(sim)
 
-    # for patient in sim.patients:
-    #     # print(f"Patient {patient.id} waiting time = {patient.waiting_time}")
-    #     print(f"Patient {patient.id} leaves the system at time = {patient.leave_time}")
-    #
-    # Print the results
     print(f"Patients processed: {sim.patients_processed}")
     print(sim.patients_processed, sim.sim_time, sim.patient_count)
-    # if sim.patients_processed == None:
-    #     print(f"No info about num patients processed received")
-    #
-    # Total patients produced
-    print(f"Total patients generated: {sim.patient_count}")
